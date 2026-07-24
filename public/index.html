@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d1020" />
+  <title>Human Bingo</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<!-- ───────────────────────── HOME ───────────────────────── -->
+<section class="screen is-active" id="screen-home">
+  <div class="stack center">
+    <header class="brand">
+      <div class="brand-mark">
+        <span>B</span><span>I</span><span>N</span><span>G</span><span>O</span>
+      </div>
+      <h1>Human Bingo</h1>
+      <p class="lede">
+        Find the people who match your squares. Questions written fresh by Groq for every player.
+      </p>
+    </header>
+
+    <div class="card">
+      <button class="btn btn-primary btn-lg" id="go-create">Create a room</button>
+      <button class="btn btn-ghost btn-lg" id="go-join">Join with a code</button>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── CREATE ───────────────────────── -->
+<section class="screen" id="screen-create">
+  <div class="stack">
+    <button class="back" data-back="home">&larr; Back</button>
+    <h2>Create a room</h2>
+
+    <form class="card" id="form-create">
+      <label class="field">
+        <span class="field-label">Your name</span>
+        <input id="create-name" type="text" maxlength="20" placeholder="e.g. Tony" autocomplete="off" required />
+      </label>
+
+      <div class="field">
+        <span class="field-label">Grid size</span>
+        <div class="sizes" id="size-picker">
+          <button type="button" class="size" data-size="3"><b>3&times;3</b><em>9 squares</em></button>
+          <button type="button" class="size is-on" data-size="4"><b>4&times;4</b><em>16 squares</em></button>
+          <button type="button" class="size" data-size="5"><b>5&times;5</b><em>25 squares</em></button>
+          <button type="button" class="size" data-size="6"><b>6&times;6</b><em>36 squares</em></button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">Question categories</span>
+        <div class="chips" id="category-picker">
+          <label class="chip"><input type="checkbox" value="hobbies" checked /><span>Hobbies</span></label>
+          <label class="chip"><input type="checkbox" value="personality" checked /><span>Personality</span></label>
+          <label class="chip"><input type="checkbox" value="travel" /><span>Travel</span></label>
+          <label class="chip"><input type="checkbox" value="food" /><span>Food</span></label>
+          <label class="chip"><input type="checkbox" value="skills" /><span>Skills</span></label>
+          <label class="chip"><input type="checkbox" value="quirky" checked /><span>Quirky</span></label>
+        </div>
+        <p class="hint">Leave all unticked to mix everything.</p>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Theme <em>(optional)</em></span>
+        <input id="create-theme" type="text" maxlength="120" placeholder="e.g. remote dev team, university freshers" autocomplete="off" />
+        <p class="hint">Groq tailors every question to the group you describe.</p>
+      </label>
+
+      <button class="btn btn-primary btn-lg" type="submit">Create room</button>
+    </form>
+  </div>
+</section>
+
+<!-- ───────────────────────── JOIN ───────────────────────── -->
+<section class="screen" id="screen-join">
+  <div class="stack">
+    <button class="back" data-back="home">&larr; Back</button>
+    <h2>Join a room</h2>
+
+    <p class="invite-note" id="invite-note" hidden></p>
+
+    <form class="card" id="form-join">
+      <label class="field">
+        <span class="field-label">Room code</span>
+        <input id="join-code" class="code-input" type="text" maxlength="4" placeholder="XKPQ"
+               autocomplete="off" autocapitalize="characters" spellcheck="false" required />
+      </label>
+
+      <label class="field">
+        <span class="field-label">Your name</span>
+        <input id="join-name" type="text" maxlength="20" placeholder="e.g. Mai" autocomplete="off" required />
+        <p class="hint">Two players can't share a name in the same room.</p>
+      </label>
+
+      <button class="btn btn-primary btn-lg" type="submit">Join room</button>
+    </form>
+  </div>
+</section>
+
+<!-- ───────────────────────── LOBBY ───────────────────────── -->
+<section class="screen" id="screen-lobby">
+  <div class="stack">
+    <div class="room-head">
+      <div>
+        <p class="eyebrow">Room code</p>
+        <button class="room-code" id="lobby-code" title="Tap to copy the invite link">----</button>
+      </div>
+      <div class="room-meta" id="lobby-meta"></div>
+    </div>
+
+    <div class="invite">
+      <input class="invite-link" id="invite-link" type="text" readonly aria-label="Invite link" />
+      <button class="btn btn-tiny btn-primary" id="copy-invite" type="button">Copy link</button>
+    </div>
+    <p class="hint" id="invite-hint" hidden></p>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Players <span class="count" id="lobby-count">0</span></h3>
+        <p class="hint" id="lobby-need"></p>
+      </div>
+      <ul class="players" id="lobby-players"></ul>
+    </div>
+
+    <details class="card rules">
+      <summary>How to play</summary>
+      <ol>
+        <li>Everyone gets their own card &mdash; <b>different questions on every card</b>.</li>
+        <li>Talk to people. When someone matches a square, tap it and pick their name.</li>
+        <li>You may use the same person again, but <b>never twice in a row</b>.</li>
+        <li>First to complete a full row, column or diagonal wins.</li>
+      </ol>
+    </details>
+
+    <div class="actions" id="lobby-actions"></div>
+  </div>
+</section>
+
+<!-- ───────────────────────── GAME ───────────────────────── -->
+<section class="screen screen-wide" id="screen-game">
+  <div class="game-bar">
+    <button class="room-code sm" id="game-code" title="Tap to copy the invite link">----</button>
+    <div class="progress">
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+      <span id="progress-text">0 / 0</span>
+    </div>
+    <button class="btn btn-tiny btn-ghost" id="toggle-scores">Players</button>
+  </div>
+
+  <p class="banner" id="game-banner" hidden></p>
+
+  <div class="board-wrap">
+    <div class="board" id="board"></div>
+  </div>
+
+  <aside class="scores" id="scores" hidden>
+    <h3>Progress</h3>
+    <ul class="players" id="game-players"></ul>
+  </aside>
+
+  <div class="actions" id="game-actions"></div>
+</section>
+
+<!-- ───────────────────────── PICK-A-PLAYER SHEET ───────────────────────── -->
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-backdrop" data-close-sheet></div>
+  <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-question">
+    <div class="sheet-grip"></div>
+    <p class="eyebrow">Who matches this?</p>
+    <h3 id="sheet-question">&nbsp;</h3>
+    <input class="search" id="sheet-search" type="text" placeholder="Search players" autocomplete="off" hidden />
+    <ul class="pick-list" id="sheet-list"></ul>
+    <button class="btn btn-ghost" data-close-sheet>Cancel</button>
+  </div>
+</div>
+
+<!-- ───────────────────────── OVERLAYS ───────────────────────── -->
+<div class="overlay" id="overlay-loading" hidden>
+  <div class="overlay-card">
+    <div class="spinner"></div>
+    <h3>Groq is writing the cards</h3>
+    <p class="hint">Every player gets a unique set of questions.</p>
+  </div>
+</div>
+
+<div class="overlay" id="overlay-win" hidden>
+  <div class="overlay-card win">
+    <p class="confetti">🎉</p>
+    <h2 id="win-title">BINGO!</h2>
+    <p id="win-sub" class="hint"></p>
+    <button class="btn btn-primary" id="win-close">See the board</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

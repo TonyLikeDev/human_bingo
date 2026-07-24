@@ -1,0 +1,20 @@
+{
+  "name": "human-bingo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Online Human Bingo icebreaker with Groq-generated questions",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node test/smoke.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.5"
+  }
+}
