@@ -1,8 +1,6 @@
-/* Human Bingo client. */
+/* Human Bingo client. Talks to the serverless API over plain fetch + short polling. */
 
-// Empty BINGO_SERVER = same origin (local dev); a full URL = the external server (Vercel deploy).
-const SERVER = (window.BINGO_SERVER || '').replace(/\/+$/, '');
-const socket = SERVER ? io(SERVER) : io();
+const POLL_MS = 2000; // how often we refresh room + board state
 const $ = (id) => document.getElementById(id);
 const SESSION_KEY = 'humanBingo.session';
 
@@ -52,8 +50,32 @@ function toast(message, bad = false) {
   }, 3200);
 }
 
-const emit = (event, payload) =>
-  new Promise((resolve) => socket.emit(event, payload, (res) => resolve(res ?? { ok: false, error: 'No response from server.' })));
+/**
+ * Run a game action. Sends the caller's session (once they have one) so the server can
+ * authenticate them, and opportunistically applies any fresh room/board in the reply so
+ * the player's own actions feel instant rather than waiting for the next poll.
+ */
+async function emit(action, payload = {}) {
+  const session = state.me
+    ? { code: state.me.code, playerId: state.me.id, token: state.me.token }
+    : null;
+  try {
+    const res = await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, payload, session }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!data) return { ok: false, error: 'No response from server.' };
+    if (state.me && data.ok) {
+      if (data.room) applyRoom(data.room);
+      if (data.private) applyPrivate(data.private);
+    }
+    return data;
+  } catch {
+    return { ok: false, error: 'No response from server.' };
+  }
+}
 
 const inviteUrl = (code) => `${location.origin}${location.pathname}?room=${code}`;
 
@@ -121,6 +143,7 @@ $('form-create').addEventListener('submit', async (e) => {
   state.me = { id: res.playerId, token: res.token, code: res.code, name: $('create-name').value.trim() };
   saveSession();
   applyRoom(res.room);
+  startPolling();
 });
 
 /* ── join form ──────────────────────────────────────────────── */
@@ -143,6 +166,8 @@ $('form-join').addEventListener('submit', async (e) => {
   state.me = { id: res.playerId, token: res.token, code: res.code, name };
   saveSession();
   applyRoom(res.room);
+  if (res.private) applyPrivate(res.private);
+  startPolling();
 });
 
 /* ── room code copy buttons ─────────────────────────────────── */
@@ -164,7 +189,7 @@ function renderLobby() {
 
   $('invite-link').value = inviteUrl(room.code);
   // Only reset the QR src when the room changes, so it doesn't reload on every lobby update.
-  const qrSrc = `${SERVER}/qr?room=${encodeURIComponent(room.code)}`;
+  const qrSrc = `/api/qr?room=${encodeURIComponent(room.code)}`;
   if ($('qr-img').getAttribute('src') !== qrSrc) $('qr-img').src = qrSrc;
 
   // A localhost link is useless to anyone else on the network - say so rather than let
@@ -449,6 +474,7 @@ async function confirmClear(index, cell) {
 /* ── leaving ────────────────────────────────────────────────── */
 async function leaveRoom() {
   await emit('leave_room');
+  stopPolling();
   state.room = null;
   state.me = null;
   state.board = [];
@@ -468,7 +494,7 @@ async function leaveRoom() {
   show('home');
 }
 
-/* ── server events ──────────────────────────────────────────── */
+/* ── applying server state ──────────────────────────────────── */
 function applyRoom(room) {
   const previousStatus = state.room?.status;
   state.room = room;
@@ -492,11 +518,21 @@ function applyRoom(room) {
     show('game');
     renderGame();
   }
+
+  // The win is announced via the room's winner field now (no separate push event).
+  if (room.winner && !state.winAcknowledged) {
+    state.winAcknowledged = true;
+    const mine = room.winner.id === state.me?.id;
+    $('win-title').textContent = mine ? 'BINGO!' : 'Game over';
+    $('win-sub').textContent = mine
+      ? 'You completed a line first. Nicely mingled.'
+      : `${room.winner.name} completed a line first.`;
+    $('overlay-win').hidden = false;
+  }
 }
 
-socket.on('room_update', (room) => applyRoom(room));
-
-socket.on('private_update', (payload) => {
+function applyPrivate(payload) {
+  if (!payload) return;
   state.board = payload.board || [];
   state.bingoLine = payload.bingoLine;
   state.lastUsedName = payload.lastUsedName;
@@ -505,18 +541,7 @@ socket.on('private_update', (payload) => {
     renderGame();
     if (!$('sheet').hidden) renderPickList($('sheet-search').value);
   }
-});
-
-socket.on('bingo', ({ winner }) => {
-  if (state.winAcknowledged) return;
-  state.winAcknowledged = true;
-  const mine = winner.id === state.me?.id;
-  $('win-title').textContent = mine ? 'BINGO!' : 'Game over';
-  $('win-sub').textContent = mine
-    ? 'You completed a line first. Nicely mingled.'
-    : `${winner.name} completed a line first.`;
-  $('overlay-win').hidden = false;
-});
+}
 
 $('win-close').onclick = () => {
   $('overlay-win').hidden = true;
@@ -542,8 +567,66 @@ if (invitedCode) {
   }
 }
 
-/* ── reconnect / refresh ────────────────────────────────────── */
-socket.on('connect', async () => {
+/* ── polling ────────────────────────────────────────────────── */
+let pollTimer = null;
+let pollFails = 0;
+
+async function pollOnce() {
+  if (!state.me) return;
+  const qs = new URLSearchParams({
+    code: state.me.code,
+    playerId: state.me.id,
+    token: state.me.token,
+  });
+  try {
+    const res = await fetch(`/api/state?${qs}`, { headers: { 'Cache-Control': 'no-cache' } });
+    const data = await res.json();
+    if (data.ok) {
+      pollFails = 0;
+      if (data.room) applyRoom(data.room);
+      if (data.private) applyPrivate(data.private);
+    } else if (data.gone) {
+      // Removed from the room, or the room expired - drop back home cleanly.
+      endSession(data.error || 'This room has closed.');
+    }
+  } catch {
+    // A couple of missed polls are normal; only nag if it persists.
+    if (++pollFails === 3) toast('Connection hiccup — retrying…', true);
+  }
+}
+
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(pollOnce, POLL_MS);
+}
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+/** Wipe local session state and return to the home screen (used when the room is gone). */
+function endSession(message) {
+  stopPolling();
+  if (message) toast(message, true);
+  state.room = null;
+  state.me = null;
+  state.board = [];
+  state.bingoLine = null;
+  state.usage = {};
+  state.lastUsedName = null;
+  state.winAcknowledged = false;
+  lastBoardSignature = null;
+  lastActionsSignature = null;
+  sessionStorage.removeItem(SESSION_KEY);
+  closeSheet();
+  $('overlay-win').hidden = true;
+  $('overlay-loading').hidden = true;
+  if (location.search) history.replaceState(null, '', location.pathname);
+  show('home');
+}
+
+/* ── resume an existing session on load / refresh ───────────── */
+async function boot() {
   const saved = state.me || loadSession();
   if (!saved) return;
 
@@ -551,19 +634,16 @@ socket.on('connect', async () => {
   if (!res.ok) {
     sessionStorage.removeItem(SESSION_KEY);
     state.me = null;
-    if (state.room) {
-      toast(res.error, true);
-      state.room = null;
-      show('home');
-    }
-    return;
+    return; // stay on whatever screen we're on (home, or the invite join screen)
   }
   state.me = { id: res.playerId, token: res.token, code: res.code, name: saved.name };
   saveSession();
   applyRoom(res.room);
-});
+  if (res.private) applyPrivate(res.private);
+  startPolling();
+}
 
-socket.on('disconnect', () => toast('Connection lost — reconnecting…', true));
+boot();
 
 /* ── util ───────────────────────────────────────────────────── */
 function escapeHtml(str) {

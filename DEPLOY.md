@@ -1,40 +1,45 @@
-# Deploying Human Bingo (Vercel frontend + external socket server)
+# Deploying Human Bingo to Vercel
 
-Vercel's serverless platform can't run a persistent WebSocket server or hold in-memory
-room state, so this app is deployed in two pieces:
+The whole app runs on Vercel: the frontend in `public/` is served as static files, and
+everything server-side (`/api/action`, `/api/state`, `/api/qr`) runs as serverless functions.
 
-- **Frontend** (`public/`) — static, on **Vercel**.
-- **Realtime server** (`server.js`) — a long-lived Node process, on **Render / Railway / Fly.io**.
+Because serverless functions are stateless and don't share memory, rooms are kept in **Redis**
+(Vercel KV / Upstash) instead of a process-local map, and the client uses short polling instead
+of WebSockets (which Vercel serverless can't hold open). `vercel.json` already wires the static
+site + functions together — you don't need to configure a build.
 
-## 1. Deploy the server (Render example)
+## Steps
 
-1. New **Web Service** → connect this repo.
-2. Build command: `npm install` — Start command: `npm start`.
-3. Environment variables:
-   - `GROQ_API_KEY` — your Groq key (required for question generation).
-   - `CLIENT_ORIGIN` — your Vercel URL, e.g. `https://human-bingo.vercel.app`
-     (comma-separate if you have several; controls who may connect).
-   - `PUBLIC_ORIGIN` — same Vercel URL. Makes the QR code / invite link send players
-     to the Vercel frontend instead of to this server.
-   - `PORT` is provided by the host automatically — don't set it.
-4. Deploy, then note the service URL, e.g. `https://human-bingo.onrender.com`.
+1. **Import the repo** into Vercel (New Project → pick this repository → Deploy). No framework,
+   no build command — `vercel.json` handles it.
 
-## 2. Point the frontend at the server
+2. **Add a Redis store.** In the project: **Storage → Create Database → KV** (Upstash Redis).
+   Connect it to the project. This injects `KV_REST_API_URL` and `KV_REST_API_TOKEN` as
+   environment variables automatically. (An existing Upstash database works too — its
+   `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` are also accepted.)
 
-Edit `public/config.js` and set the server URL (no trailing slash):
+3. **Add your Groq key.** Project → **Settings → Environment Variables**:
+   - `GROQ_API_KEY` = your key from https://console.groq.com/keys
+   - `GROQ_MODEL` (optional) = a Groq chat model; defaults to `llama-3.3-70b-versatile`.
 
-```js
-window.BINGO_SERVER = "https://human-bingo.onrender.com";
-```
+4. **Redeploy** so the new environment variables take effect (Deployments → ⋯ → Redeploy).
 
-Commit this change.
+That's it — open the deployment URL and create a room. The invite link and QR point at the
+same Vercel URL, so players just scan and join.
 
-## 3. Deploy the frontend on Vercel
+## Notes
 
-Import the repo. `vercel.json` already tells Vercel to serve `public/` as a static site
-(no build step). No environment variables are needed on Vercel.
+- **No Redis = broken multiplayer.** Without KV/Upstash credentials the functions fall back to
+  in-memory state, which is *not* shared between serverless instances, so two players can land
+  on different instances and never see each other. The database in step 2 is required. (The
+  in-memory fallback exists only so local `npm start` needs no external service.)
+- **Free tiers are fine.** Vercel Hobby + Upstash free tier comfortably run this. Board
+  generation calls Groq inline on `start_game`; the function's `maxDuration` is set to 60s.
+- **Custom domain / another host for the frontend?** Set `PUBLIC_ORIGIN` to that URL so the QR
+  and invite links point there instead of the deployment's default domain.
 
-## Local development (unchanged)
+## Local development
 
-Leave `window.BINGO_SERVER = ""`. Then `npm start` serves the page and the socket server
-together on `http://localhost:3000` — same as before.
+`npm start` runs `server.js`, a tiny Express server that serves `public/` and mounts the same
+`/api` handlers. With no Redis credentials it keeps rooms in memory — no external service
+needed. Open http://localhost:3000.

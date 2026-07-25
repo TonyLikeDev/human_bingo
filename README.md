@@ -33,7 +33,8 @@ To play across phones on the same wifi, find your machine's LAN address
 | --- | --- | --- |
 | `GROQ_API_KEY` | — | Required. Without it the server falls back to a small built-in question bank and shows a warning in the room. |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Any Groq chat model. |
-| `PORT` | `3000` | |
+| `PORT` | `3000` | Local dev server only. |
+| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | — | Redis (Vercel KV / Upstash) credentials. Set automatically when you add the integration on Vercel. Only needed for the serverless deployment; local dev keeps rooms in memory. `UPSTASH_REDIS_REST_URL` / `_TOKEN` are also accepted. |
 
 ## Inviting people
 
@@ -41,9 +42,9 @@ The lobby shows an invite link — `http://<host>:3000/?room=SSSZ` — with a **
 and a **QR code** underneath. Anyone can point a phone camera at the QR to open the join screen;
 tapping the big room code (in the lobby or during the game) copies the same link.
 
-The QR is served by `GET /qr?room=CODE` as an SVG. The server rebuilds the invite URL from the
-`Host` header the browser used, so the QR encodes exactly the address the host is on — LAN IP
-and port included — without the server having to know its own hostname.
+The QR is served by `GET /api/qr?room=CODE` as an SVG. The server rebuilds the invite URL from
+the `Host` header the browser used, so the QR encodes exactly the address the host is on — LAN
+IP and port included — without the server having to know its own hostname.
 
 Opening that link drops the player straight onto the join screen with the code already filled
 in and the cursor in the name box, so all they do is type a name and tap Join. They can still
@@ -103,7 +104,7 @@ With the server running (`npm start`) in one terminal:
 npm test
 ```
 
-`test/smoke.mjs` drives a real 3-player game over websockets and asserts every rule above:
+`test/smoke.mjs` drives a real 3-player game over the HTTP API and asserts every rule above:
 duplicate names, the 3-player minimum, per-player question uniqueness, self-marking, the
 not-twice-in-a-row rule, clearing squares, bingo detection, late joiners, token reconnects and
 host retention across a refresh.
@@ -111,13 +112,22 @@ host retention across a refresh.
 ## Layout
 
 ```
-server.js           Express + Socket.IO, room state, all rule enforcement
+api/action.js       one endpoint for every game action (create/join/mark/...)
+api/state.js        poll + presence heartbeat the client hits every 2s
+api/qr.js           invite QR as an SVG
+lib/engine.js       all rule enforcement, operating on the store
+lib/store.js        room persistence: Redis (KV/Upstash) or in-memory for local dev
 lib/game.js         room codes, name matching, bingo detection, serialisation
 lib/questions.js    Groq calls, dedupe, fallback bank
+server.js           local dev server — serves public/ and mounts the api/ handlers
 public/             single-page client (no build step, no dependencies)
 ```
 
-Rooms live in memory — restarting the server drops them. Idle rooms are swept after 6 hours.
+The client is a plain fetch + short-polling app (no WebSockets), so it runs on stateless
+serverless platforms. See **[DEPLOY.md](DEPLOY.md)** for deploying to Vercel.
+
+Rooms live in the store and expire 6 hours after their last activity. Locally that store is an
+in-process map (restarting drops rooms); in production it's Redis, shared across instances.
 
 Reconnects are handled: each player holds a token in `sessionStorage`, so refreshing the page
 puts you back on your own board. A host who refreshes keeps the host role.

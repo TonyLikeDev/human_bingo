@@ -3,5 +3,8 @@
   "framework": null,
   "buildCommand": null,
   "outputDirectory": "public",
-  "cleanUrls": true
+  "cleanUrls": true,
+  "functions": {
+    "api/*.js": { "maxDuration": 60 }
+  }
 }
