@@ -83,6 +83,16 @@ const dS = sessionFrom(danJoin);
 await refresh();
 assert(room.playerCount === 3, `three players now (${room.playerCount})`);
 
+// ── quitting the page marks a player offline immediately ─────────────
+await call(dS, 'away'); // Dan closes his tab
+await refresh();
+const danGone = room.players.find((p) => p.name === 'Dan');
+assert(danGone && !danGone.connected && room.playerCount === 2, `a player who quits drops offline at once (${room.playerCount} online)`);
+await stateOf(dS); // Dan reopens the page (a poll heartbeat)
+await refresh();
+const danBack = room.players.find((p) => p.name === 'Dan');
+assert(danBack && danBack.connected && room.playerCount === 3, `the player is back online after returning (${room.playerCount} online)`);
+
 const notHost = await call(bS, 'start_game');
 assert(!notHost.ok && /host/i.test(notHost.error), `non-host cannot start -> "${notHost.error}"`);
 

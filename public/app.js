@@ -654,6 +654,42 @@ function endSession(message) {
   show('home');
 }
 
+/* ── quit detection ─────────────────────────────────────────── */
+// When the tab is closed or navigated away there's no time for a normal request, so fire a
+// keepalive beacon that marks this player offline immediately for everyone else. (A plain
+// refresh fires this too, then boot() re-joins and flips them straight back online.)
+function sendAway() {
+  if (!state.me) return;
+  const body = JSON.stringify({
+    action: 'away',
+    session: { code: state.me.code, playerId: state.me.id, token: state.me.token },
+  });
+  try {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/action', new Blob([body], { type: 'application/json' }));
+    } else {
+      fetch('/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        keepalive: true,
+      });
+    }
+  } catch {
+    /* the page is going away; nothing more we can do */
+  }
+}
+
+window.addEventListener('pagehide', sendAway);
+
+// Restored from the back/forward cache (common on mobile): catch presence back up.
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted && state.me) {
+    startPolling();
+    pollOnce();
+  }
+});
+
 /* ── resume an existing session on load / refresh ───────────── */
 async function boot() {
   const saved = state.me || loadSession();
