@@ -119,7 +119,7 @@
     <p class="hint" id="invite-hint" hidden></p>
 
     <div class="qr" id="qr-box">
-      <img class="qr-img" id="qr-img" alt="QR code to join this room" width="180" height="180" />
+      <img class="qr-img" id="qr-img" alt="QR code to join this room" width="260" height="260" />
       <p class="hint">Scan to join</p>
     </div>
     <p class="role-note" id="role-note" hidden></p>
@@ -215,7 +215,27 @@
 
 <div class="toast" id="toast" hidden></div>
 
-<script src="/socket.io/socket.io.js"></script>
-<script src="/app.js"></script>
+<script src="/config.js"></script>
+<script>
+  // Load the Socket.IO client from wherever the realtime server lives (window.BINGO_SERVER,
+  // set in config.js). Empty string = same origin, which is how local dev works. Once the
+  // client script is on the page, load the app.
+  (function () {
+    var base = (window.BINGO_SERVER || '').replace(/\/+$/, '');
+    var sio = document.createElement('script');
+    sio.src = base + '/socket.io/socket.io.js';
+    sio.onload = function () {
+      var app = document.createElement('script');
+      app.src = '/app.js';
+      document.body.appendChild(app);
+    };
+    sio.onerror = function () {
+      document.getElementById('toast').textContent =
+        'Cannot reach the game server. Check the BINGO_SERVER setting in config.js.';
+      document.getElementById('toast').hidden = false;
+    };
+    document.body.appendChild(sio);
+  })();
+</script>
 </body>
 </html>

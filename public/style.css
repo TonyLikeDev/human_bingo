@@ -287,8 +287,8 @@ input[type="text"]:focus-visible {
 .qr .hint { margin: 0; }
 .qr-img {
   display: block;
-  width: 180px;
-  height: 180px;
+  width: 260px;
+  height: 260px;
   padding: 10px;
   border-radius: var(--radius-sm);
   background: #fff;

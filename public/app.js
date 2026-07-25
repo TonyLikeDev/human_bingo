@@ -1,6 +1,8 @@
 /* Human Bingo client. */
 
-const socket = io();
+// Empty BINGO_SERVER = same origin (local dev); a full URL = the external server (Vercel deploy).
+const SERVER = (window.BINGO_SERVER || '').replace(/\/+$/, '');
+const socket = SERVER ? io(SERVER) : io();
 const $ = (id) => document.getElementById(id);
 const SESSION_KEY = 'humanBingo.session';
 
@@ -162,7 +164,7 @@ function renderLobby() {
 
   $('invite-link').value = inviteUrl(room.code);
   // Only reset the QR src when the room changes, so it doesn't reload on every lobby update.
-  const qrSrc = `/qr?room=${encodeURIComponent(room.code)}`;
+  const qrSrc = `${SERVER}/qr?room=${encodeURIComponent(room.code)}`;
   if ($('qr-img').getAttribute('src') !== qrSrc) $('qr-img').src = qrSrc;
 
   // A localhost link is useless to anyone else on the network - say so rather than let

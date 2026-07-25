@@ -29,9 +29,27 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const ROOM_TTL_MS = 6 * 60 * 60 * 1000; // rooms are dropped 6h after last activity
 
+// When the frontend is hosted elsewhere (e.g. static on Vercel), the browser connects
+// cross-origin. CLIENT_ORIGIN is a comma-separated allowlist of those origins; unset means
+// "reflect any origin", which is fine for local dev but should be set in production.
+const ALLOWED_ORIGINS = (process.env.CLIENT_ORIGIN || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// The origin players should land on when they scan the QR / open the invite. In a split
+// deployment this is the frontend's URL (e.g. https://your-app.vercel.app), NOT this server's.
+// Unset = derive it from the request Host header (correct when this server also serves the page).
+const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || '').replace(/\/+$/, '');
+
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  cors: {
+    origin: ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : true,
+    methods: ['GET', 'POST'],
+  },
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
@@ -43,12 +61,20 @@ const CODE_RE = /^[A-Z0-9]{4}$/;
 const HOST_RE = /^[a-zA-Z0-9.\-:[\]]{1,255}$/; // hostname[:port], incl. bracketed IPv6
 app.get('/qr', async (req, res) => {
   const code = String(req.query.room || '').toUpperCase();
-  const host = req.headers.host;
   if (!CODE_RE.test(code)) return res.status(400).type('text/plain').send('Invalid room code.');
-  if (!host || !HOST_RE.test(host)) return res.status(400).type('text/plain').send('Bad host.');
 
-  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http';
-  const url = `${proto}://${host}/?room=${code}`;
+  // Prefer an explicitly configured public origin (split deploys); otherwise rebuild from the
+  // Host header the client used, so a single-server deploy still points at the right address.
+  let base;
+  if (PUBLIC_ORIGIN) {
+    base = PUBLIC_ORIGIN;
+  } else {
+    const host = req.headers.host;
+    if (!host || !HOST_RE.test(host)) return res.status(400).type('text/plain').send('Bad host.');
+    const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http';
+    base = `${proto}://${host}`;
+  }
+  const url = `${base}/?room=${code}`;
 
   try {
     const svg = await QRCode.toString(url, {
@@ -476,6 +502,15 @@ setInterval(() => {
     }
   }
 }, 10 * 60 * 1000).unref();
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n  Port ${PORT} is already in use by another process.`);
+    console.error(`  Start on a different port with:  PORT=${PORT + 1} npm start\n`);
+    process.exit(1);
+  }
+  throw err;
+});
 
 server.listen(PORT, () => {
   console.log(`\n  Human Bingo running at http://localhost:${PORT}`);
