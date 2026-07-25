@@ -7,6 +7,9 @@ talk to people, and when someone matches a square you tap it and pick their name
 
 First player to complete a full row, column or diagonal wins.
 
+**The host runs the game and does not play.** They get no card, nobody can put their name on a
+square, and their screen is a live scoreboard of everyone's progress instead of a grid.
+
 Every player's questions are generated separately by **Groq**, so no two cards share a single
 square.
 
@@ -34,8 +37,13 @@ To play across phones on the same wifi, find your machine's LAN address
 
 ## Inviting people
 
-The lobby shows an invite link — `http://<host>:3000/?room=SSSZ` — with a **Copy link** button.
-Tapping the big room code (in the lobby or during the game) copies the same link.
+The lobby shows an invite link — `http://<host>:3000/?room=SSSZ` — with a **Copy link** button
+and a **QR code** underneath. Anyone can point a phone camera at the QR to open the join screen;
+tapping the big room code (in the lobby or during the game) copies the same link.
+
+The QR is served by `GET /qr?room=CODE` as an SVG. The server rebuilds the invite URL from the
+`Host` header the browser used, so the QR encodes exactly the address the host is on — LAN IP
+and port included — without the server having to know its own hostname.
 
 Opening that link drops the player straight onto the join screen with the code already filled
 in and the cursor in the name box, so all they do is type a name and tap Join. They can still
@@ -56,8 +64,11 @@ Details worth knowing:
 ## Rules
 
 - **Grid size** — the host picks 3×3, 4×4, 5×5 or 6×6 when creating the room.
-- **Minimum 3 players.** The "not twice in a row" rule below means that with only one other
-  person you would be stuck after your first square, so the server blocks a smaller start.
+- **The host doesn't play.** No card, and they can't be named on anyone's square. Their game
+  screen is a scoreboard, and they keep the Start / Play again controls.
+- **Minimum 3 players, not counting the host** — so four people in the room. The "not twice in
+  a row" rule below means each player needs two others to alternate between, so the server
+  blocks a smaller start.
 - **Names are unique per room**, compared case-insensitively — a second "tony" is refused while
   "Tony" is in the room.
 - **Marking is trust-based.** Tap a square, pick a player, it marks immediately. Nobody has to
@@ -109,5 +120,10 @@ public/             single-page client (no build step, no dependencies)
 Rooms live in memory — restarting the server drops them. Idle rooms are swept after 6 hours.
 
 Reconnects are handled: each player holds a token in `sessionStorage`, so refreshing the page
-puts you back on your own board. A host who refreshes keeps the host role; it only passes to
-another player if they stay gone for 45 seconds or leave explicitly.
+puts you back on your own board. A host who refreshes keeps the host role.
+
+Host handover is deliberately cautious, because becoming host now means losing your card. If
+the host leaves or stays disconnected past 45 seconds, the role passes to the longest-present
+player — but **only in the lobby or after a round has finished**. A room whose host vanishes
+mid-round plays on to the end untouched, and picks a new host once someone wins. Nobody's card
+is ever taken away mid-game.

@@ -5,6 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
+import QRCode from 'qrcode';
 
 import { generateTraits, CATEGORIES } from './lib/questions.js';
 import {
@@ -34,6 +35,34 @@ const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
+
+// QR code for a room's invite link, as an SVG. The URL is rebuilt from the Host header the
+// client actually used, so a phone scanning it lands on exactly the same address the host is
+// on (LAN IP included) - the server never has to guess the hostname.
+const CODE_RE = /^[A-Z0-9]{4}$/;
+const HOST_RE = /^[a-zA-Z0-9.\-:[\]]{1,255}$/; // hostname[:port], incl. bracketed IPv6
+app.get('/qr', async (req, res) => {
+  const code = String(req.query.room || '').toUpperCase();
+  const host = req.headers.host;
+  if (!CODE_RE.test(code)) return res.status(400).type('text/plain').send('Invalid room code.');
+  if (!host || !HOST_RE.test(host)) return res.status(400).type('text/plain').send('Bad host.');
+
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http';
+  const url = `${proto}://${host}/?room=${code}`;
+
+  try {
+    const svg = await QRCode.toString(url, {
+      type: 'svg',
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      color: { dark: '#0b0e1a', light: '#ffffff' },
+    });
+    res.type('image/svg+xml').set('Cache-Control', 'no-store').send(svg);
+  } catch (err) {
+    console.error('[qr] generation failed:', err.message);
+    res.status(500).type('text/plain').send('QR generation failed.');
+  }
+});
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
@@ -92,19 +121,31 @@ async function dealBoards(room, targets) {
 
 const HOST_GRACE_MS = 45_000;
 
-/** Hand the host role to someone else. Only used when the host is really gone. */
+/**
+ * Hand the host role to a player. Because the host doesn't play, this takes their card away,
+ * so callers must only do it when no card is at stake.
+ */
 function promoteHost(room) {
-  const next =
-    [...room.players.values()].find((p) => p.connected) ?? [...room.players.values()][0];
-  if (next && next.id !== room.hostId) {
-    room.hostId = next.id;
-    console.log(`[room ${room.code}] host is now "${next.name}"`);
-  }
+  const candidates = playingMembers(room);
+  const next = candidates.find((p) => p.connected) ?? candidates[0];
+  if (!next) return;
+
+  room.hostId = next.id;
+  next.board = [];
+  next.history = [];
+  next.bingoLine = null;
+  console.log(`[room ${room.code}] host is now "${next.name}"`);
+  sendPrivate(next);
 }
 
-/** Called whenever the player list changes: only acts if the host left the room entirely. */
+/**
+ * Only acts if the host left the room entirely, and never mid-round: a room whose host
+ * vanishes during play simply finishes the round, then picks a new host.
+ */
 function promoteHostIfNeeded(room) {
-  if (!room.players.has(room.hostId)) promoteHost(room);
+  if (room.players.has(room.hostId)) return;
+  if (room.status === 'playing' || room.status === 'generating') return;
+  promoteHost(room);
 }
 
 function clearHostHandover(room) {
@@ -124,6 +165,7 @@ function scheduleHostHandover(room) {
     room.hostGraceTimer = null;
     const host = room.players.get(room.hostId);
     if (host && host.connected) return;
+    if (room.status === 'playing' || room.status === 'generating') return;
     promoteHost(room);
     broadcastRoom(room);
   }, HOST_GRACE_MS);
@@ -297,6 +339,7 @@ io.on('connection', (socket) => {
     const { room, player } = findSocketRoom(socket);
     if (!room || !player) return reply(cb, fail('You are not in a room.'));
     if (room.status !== 'playing') return reply(cb, fail('The game is not running.'));
+    if (!isPlayer(room, player)) return reply(cb, fail("You're hosting - you don't have a card."));
 
     const index = Number(payload.cellIndex);
     const cell = player.board[index];
@@ -306,6 +349,9 @@ io.on('connection', (socket) => {
     const target = room.players.get(String(payload.targetId));
     if (!target) return reply(cb, fail('That player is no longer in the room.'));
     if (target.id === player.id) return reply(cb, fail('You have to find someone else!'));
+    if (!isPlayer(room, target)) {
+      return reply(cb, fail(`${target.name} is running the game and isn't playing.`));
+    }
 
     const blocked = lastUsedName(player);
     if (blocked && nameKey(blocked) === nameKey(target.name)) {
@@ -324,6 +370,8 @@ io.on('connection', (socket) => {
         room.status = 'finished';
         io.to(room.code).emit('bingo', { winner: { id: player.id, name: player.name } });
         console.log(`[room ${room.code}] BINGO by "${player.name}"`);
+        // A host who left mid-round can be replaced now that no card is at stake.
+        promoteHostIfNeeded(room);
       }
     }
 

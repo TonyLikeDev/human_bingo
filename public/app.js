@@ -161,25 +161,34 @@ function renderLobby() {
   `;
 
   $('invite-link').value = inviteUrl(room.code);
+  // Only reset the QR src when the room changes, so it doesn't reload on every lobby update.
+  const qrSrc = `/qr?room=${encodeURIComponent(room.code)}`;
+  if ($('qr-img').getAttribute('src') !== qrSrc) $('qr-img').src = qrSrc;
+
   // A localhost link is useless to anyone else on the network - say so rather than let
   // the host share a link that silently fails on their friends' phones.
   const isLocal = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
   $('invite-hint').hidden = !isLocal;
   $('invite-hint').textContent = isLocal
-    ? "This link only works on this computer. Reopen the app on your machine's network address to share it."
+    ? "This link and QR only work on this computer. Reopen the app on your machine's network address to share them."
     : '';
 
-  $('lobby-count').textContent = room.players.length;
+  const isHost = room.hostId === state.me.id;
+  $('role-note').hidden = !isHost;
+  $('role-note').textContent = isHost
+    ? "You're running this game, so you won't get a card and players can't use your name."
+    : '';
+
+  // The host is not a player, so they are not counted here or towards the minimum.
+  $('lobby-count').textContent = room.players.filter((p) => p.isPlayer).length;
   $('lobby-players').innerHTML = room.players.map((p) => playerRow(p, false)).join('');
 
-  const connected = room.players.filter((p) => p.connected).length;
-  const short = room.minPlayers - connected;
+  const short = room.minPlayers - room.playerCount;
   $('lobby-need').textContent =
     short > 0
       ? `${short} more player${short > 1 ? 's' : ''} needed`
       : 'Ready when you are';
 
-  const isHost = room.hostId === state.me.id;
   const actions = $('lobby-actions');
   actions.innerHTML = '';
 
@@ -187,7 +196,7 @@ function renderLobby() {
     const start = document.createElement('button');
     start.className = 'btn btn-primary btn-lg';
     start.textContent = 'Start game';
-    start.disabled = connected < room.minPlayers;
+    start.disabled = room.playerCount < room.minPlayers;
     start.onclick = async () => {
       start.disabled = true;
       const res = await emit('start_game');
@@ -217,9 +226,9 @@ function playerRow(p, withScore) {
     <li class="${p.connected ? '' : 'off'} ${isMe ? 'me' : ''}">
       <span class="dot"></span>
       <span class="who">${escapeHtml(p.name)}${isMe ? ' (you)' : ''}</span>
-      ${p.isHost ? '<span class="tag host">Host</span>' : ''}
+      ${p.isHost ? '<span class="tag host">Host &middot; not playing</span>' : ''}
       ${p.hasBingo ? '<span class="tag win">Bingo</span>' : ''}
-      ${withScore ? `<span class="score">${p.marked}/${p.total}</span>` : ''}
+      ${withScore && p.isPlayer ? `<span class="score">${p.marked}/${p.total}</span>` : ''}
     </li>`;
 }
 
@@ -231,6 +240,9 @@ function renderGame() {
   renderGameChrome();
 
   const room = state.room;
+  // The host has no card - renderGameChrome already put the scoreboard on screen for them.
+  if (room.hostId === state.me.id) return;
+
   const board = $('board');
   const winSet = new Set(state.bingoLine || []);
   const locked = room.status !== 'playing';
@@ -279,7 +291,20 @@ function renderGame() {
 /** Everything around the grid. Safe to re-run on every update. */
 function renderGameChrome() {
   const room = state.room;
+  const iAmHost = room.hostId === state.me.id;
   $('game-code').textContent = room.code;
+
+  // Host view: no card, no personal progress - just everyone else's scoreboard.
+  $('board-wrap').hidden = iAmHost;
+  $('host-panel').hidden = !iAmHost;
+  $('toggle-scores').hidden = iAmHost;
+  document.querySelector('.progress').hidden = iAmHost;
+  if (iAmHost) {
+    $('host-players').innerHTML = room.players
+      .filter((p) => p.isPlayer)
+      .map((p) => playerRow(p, true))
+      .join('');
+  }
 
   const total = state.board.length || room.size * room.size;
   const marked = state.board.filter((c) => c.markedWith).length;
@@ -368,6 +393,7 @@ function renderPickList(filter) {
 
   const candidates = state.room.players
     .filter((p) => p.id !== state.me.id)
+    .filter((p) => p.isPlayer) // the host runs the game and can't be put on a square
     .filter((p) => !needle || p.name.toLowerCase().includes(needle));
 
   if (!candidates.length) {

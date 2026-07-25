@@ -1,7 +1,7 @@
 /**
- * Headless 3-player game against the real server.
- * Verifies: room creation, duplicate-name rejection, per-player board uniqueness,
- * the "no same name twice in a row" rule, late joiners, and bingo detection.
+ * Drives a real game against a running server (npm start) and asserts every rule:
+ * the non-playing host, duplicate names, per-player question uniqueness, the
+ * not-twice-in-a-row rule, bingo detection and reconnects.
  */
 import { io } from 'socket.io-client';
 
@@ -29,28 +29,29 @@ const assert = (cond, label) => {
   if (!cond) process.exitCode = 1;
 };
 
-const a = await connect();
+// Alice hosts and never plays. Bob, Carol and Dan are the players.
+const host = await connect();
 const b = await connect();
 const c = await connect();
 const d = await connect();
-const e = await connect();
+const spare = await connect();
 
 const boards = {};
-a.on('private_update', (p) => (boards.A = p));
+host.on('private_update', (p) => (boards.host = p));
 b.on('private_update', (p) => (boards.B = p));
 c.on('private_update', (p) => (boards.C = p));
 d.on('private_update', (p) => (boards.D = p));
 
 let room = null;
-a.on('room_update', (r) => (room = r));
+host.on('room_update', (r) => (room = r));
 
 let bingoEvent = null;
-a.on('bingo', (ev) => (bingoEvent = ev));
+host.on('bingo', (ev) => (bingoEvent = ev));
 
 const idOf = (name) => room?.players.find((p) => p.name === name)?.id;
 
 // ── create ────────────────────────────────────────────────────────────
-const created = await call(a, 'create_room', {
+const created = await call(host, 'create_room', {
   name: 'Alice',
   size: 3,
   categories: ['hobbies', 'skills'],
@@ -62,7 +63,7 @@ const code = created.code;
 
 // ── names ─────────────────────────────────────────────────────────────
 const dupe = await call(b, 'join_room', { code, name: 'alice' });
-assert(!dupe.ok && /taken/i.test(dupe.error), `duplicate name rejected -> "${dupe.error}"`);
+assert(!dupe.ok && /taken/i.test(dupe.error), `host's name is reserved too -> "${dupe.error}"`);
 
 const bad = await call(b, 'join_room', { code: 'ZZZZ', name: 'Bob' });
 assert(!bad.ok, `unknown room code rejected -> "${bad.error}"`);
@@ -70,17 +71,23 @@ assert(!bad.ok, `unknown room code rejected -> "${bad.error}"`);
 const blank = await call(b, 'join_room', { code, name: '   ' });
 assert(!blank.ok, `blank name rejected -> "${blank.error}"`);
 
-// ── joins ─────────────────────────────────────────────────────────────
-const bobJoin = await call(b, 'join_room', { code, name: 'Bob' });
-assert(bobJoin.ok, 'Bob joined');
-
-const tooEarly = await call(a, 'start_game');
-assert(!tooEarly.ok && /at least 3/.test(tooEarly.error), `start blocked with 2 players -> "${tooEarly.error}"`);
-
+// ── the host does not count towards the minimum ──────────────────────
+assert((await call(b, 'join_room', { code, name: 'Bob' })).ok, 'Bob joined');
 const carolJoin = await call(c, 'join_room', { code, name: 'Carol' });
 assert(carolJoin.ok, 'Carol joined');
 const carolToken = carolJoin.token;
 await wait(150);
+
+assert(room.playerCount === 2, `host excluded from the player count (${room.playerCount})`);
+const tooEarly = await call(host, 'start_game');
+assert(
+  !tooEarly.ok && /at least 3 players besides yourself/.test(tooEarly.error),
+  `start blocked with host + 2 players -> "${tooEarly.error}"`
+);
+
+assert((await call(d, 'join_room', { code, name: 'Dan' })).ok, 'Dan joined');
+await wait(150);
+assert(room.playerCount === 3, `three players now (${room.playerCount})`);
 
 const notHost = await call(b, 'start_game');
 assert(!notHost.ok && /host/i.test(notHost.error), `non-host cannot start -> "${notHost.error}"`);
@@ -88,7 +95,7 @@ assert(!notHost.ok && /host/i.test(notHost.error), `non-host cannot start -> "${
 // ── start ─────────────────────────────────────────────────────────────
 console.log('\n… generating boards');
 const t0 = Date.now();
-const started = await call(a, 'start_game');
+const started = await call(host, 'start_game');
 assert(started.ok, `game started in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 if (!started.ok) {
   console.log('   error:', started.error);
@@ -96,89 +103,116 @@ if (!started.ok) {
 }
 await wait(400);
 
+// ── the host gets no card ────────────────────────────────────────────
+assert(boards.host.board.length === 0, `host has no card (${boards.host.board.length} squares)`);
+const hostEntry = room.players.find((p) => p.name === 'Alice');
+assert(hostEntry.isHost && !hostEntry.isPlayer, 'host is flagged as a non-player');
+
 // ── boards ────────────────────────────────────────────────────────────
 const texts = (tag) => boards[tag].board.map((cell) => cell.text);
-const aT = texts('A'), bT = texts('B'), cT = texts('C');
-assert(aT.length === 9, `board has 9 squares (got ${aT.length})`);
-assert(new Set(aT).size === 9, 'no repeated question inside one board');
-const overlap = aT.filter((t) => bT.includes(t) || cT.includes(t));
+const bT = texts('B');
+const cT = texts('C');
+const dT = texts('D');
+assert(bT.length === 9, `player board has 9 squares (got ${bT.length})`);
+assert(new Set(bT).size === 9, 'no repeated question inside one board');
+const overlap = bT.filter((t) => cT.includes(t) || dT.includes(t));
 assert(overlap.length === 0, `no question shared between players (overlap ${overlap.length})`);
-assert(aT.every((t) => t.length <= 80), 'all questions within length limit');
-console.log(`  room degraded flag: ${room.degraded} (true = Groq unavailable, bank used)`);
-console.log("\n  Alice's card:");
-aT.forEach((t, i) => console.log(`   ${i}. ${t}`));
-console.log("  Bob's card (first 3):");
-bT.slice(0, 3).forEach((t, i) => console.log(`   ${i}. ${t}`));
 
-// ── late joiner gets their own board ─────────────────────────────────
-assert((await call(d, 'join_room', { code, name: 'Dan' })).ok, 'Dan joined mid-game');
-await wait(1500);
-const dT = boards.D ? texts('D') : [];
-assert(dT.length === 9, `late joiner received a full board (${dT.length} squares)`);
-assert(!dT.some((t) => aT.includes(t)), 'late joiner questions differ from Alice\'s');
+const norm = (x) => x.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+const all = [...bT, ...cT, ...dT];
+const near = [];
+for (let i = 0; i < all.length; i++) {
+  for (let j = i + 1; j < all.length; j++) {
+    const x = norm(all[i]);
+    const y = norm(all[j]);
+    if (x.includes(y) || y.includes(x)) near.push([all[i], all[j]]);
+  }
+}
+assert(near.length === 0, `no near-duplicate questions across boards (${near.length})`);
+console.log(`  degraded: ${room.degraded} (true = Groq unavailable, bank used)`);
+console.log("\n  Bob's card:");
+bT.forEach((t, i) => console.log(`   ${i}. ${t}`));
+console.log('');
 
-// ── marking rules ────────────────────────────────────────────────────
+// ── the host cannot be marked, and cannot mark ───────────────────────
 const bobId = idOf('Bob');
 const carolId = idOf('Carol');
-assert(Boolean(bobId && carolId), 'resolved Bob + Carol ids from room state');
+const danId = idOf('Dan');
+const aliceId = idOf('Alice');
+assert(Boolean(bobId && carolId && danId && aliceId), 'resolved every player id');
 
-assert((await call(a, 'mark_cell', { cellIndex: 0, targetId: bobId })).ok, 'cell 0 marked with Bob');
+const markHost = await call(b, 'mark_cell', { cellIndex: 0, targetId: aliceId });
+assert(
+  !markHost.ok && /running the game/i.test(markHost.error),
+  `host can't be put on a square -> "${markHost.error}"`
+);
 
-const selfMark = await call(a, 'mark_cell', { cellIndex: 1, targetId: idOf('Alice') });
+const hostMarks = await call(host, 'mark_cell', { cellIndex: 0, targetId: bobId });
+assert(
+  !hostMarks.ok && /don't have a card/i.test(hostMarks.error),
+  `host can't mark squares -> "${hostMarks.error}"`
+);
+
+// ── marking rules ────────────────────────────────────────────────────
+assert((await call(b, 'mark_cell', { cellIndex: 0, targetId: carolId })).ok, 'cell 0 marked with Carol');
+
+const selfMark = await call(b, 'mark_cell', { cellIndex: 1, targetId: bobId });
 assert(!selfMark.ok && /someone else/i.test(selfMark.error), `cannot use own name -> "${selfMark.error}"`);
 
-const twice = await call(a, 'mark_cell', { cellIndex: 1, targetId: bobId });
+const twice = await call(b, 'mark_cell', { cellIndex: 1, targetId: carolId });
 assert(!twice.ok && /just used/i.test(twice.error), `same name twice in a row blocked -> "${twice.error}"`);
 
-assert((await call(a, 'mark_cell', { cellIndex: 1, targetId: carolId })).ok, 'cell 1 marked with Carol');
+assert((await call(b, 'mark_cell', { cellIndex: 1, targetId: danId })).ok, 'cell 1 marked with Dan');
 await wait(100);
-assert(boards.A.usage.bob === 1 && boards.A.usage.carol === 1, `usage map counts each name once (${JSON.stringify(boards.A.usage)})`);
+assert(
+  boards.B.usage.carol === 1 && boards.B.usage.dan === 1,
+  `usage map counts each name once (${JSON.stringify(boards.B.usage)})`
+);
 
-const bobAgain = await call(a, 'mark_cell', { cellIndex: 4, targetId: bobId });
-assert(bobAgain.ok, 'Bob usable again after someone else in between');
+assert((await call(b, 'mark_cell', { cellIndex: 4, targetId: carolId })).ok, 'Carol usable again after Dan');
 
-const clear = await call(a, 'clear_cell', { cellIndex: 4 });
+const clear = await call(b, 'clear_cell', { cellIndex: 4 });
 assert(clear.ok, 'square cleared');
 await wait(100);
-assert(boards.A.lastUsedName === 'Carol', `last-used name recomputed after clear (${boards.A.lastUsedName})`);
+assert(boards.B.lastUsedName === 'Dan', `last-used name recomputed after clear (${boards.B.lastUsedName})`);
 
 // ── bingo on the top row ─────────────────────────────────────────────
-assert((await call(a, 'mark_cell', { cellIndex: 2, targetId: bobId })).ok, 'cell 2 marked with Bob');
+assert((await call(b, 'mark_cell', { cellIndex: 2, targetId: carolId })).ok, 'cell 2 marked with Carol');
 await wait(300);
-assert(bingoEvent?.winner?.name === 'Alice', 'bingo event fired for Alice');
-assert(boards.A.bingoLine?.join() === '0,1,2', `winning line = [${boards.A.bingoLine}]`);
+assert(bingoEvent?.winner?.name === 'Bob', 'bingo event fired for Bob');
+assert(boards.B.bingoLine?.join() === '0,1,2', `winning line = [${boards.B.bingoLine}]`);
 assert(room.status === 'finished', `room status is finished (${room.status})`);
 
-const afterWin = await call(a, 'mark_cell', { cellIndex: 3, targetId: carolId });
+const afterWin = await call(b, 'mark_cell', { cellIndex: 3, targetId: danId });
 assert(!afterWin.ok && /not running/i.test(afterWin.error), `marking locked after win -> "${afterWin.error}"`);
 
 // ── reconnect / token ────────────────────────────────────────────────
-const wrongToken = await call(e, 'join_room', { code, name: 'Carol', token: 'deadbeef' });
-assert(!wrongToken.ok && /taken/i.test(wrongToken.error), `wrong token for taken name rejected -> "${wrongToken.error}"`);
+const wrongToken = await call(spare, 'join_room', { code, name: 'Carol', token: 'deadbeef' });
+assert(!wrongToken.ok && /taken/i.test(wrongToken.error), `wrong token rejected -> "${wrongToken.error}"`);
 
-const reconnect = await call(e, 'join_room', { code, name: 'Carol', token: carolToken });
+const reconnect = await call(spare, 'join_room', { code, name: 'Carol', token: carolToken });
 assert(reconnect.ok && reconnect.playerId === carolId, 'correct token reconnects as the same player');
 
 // ── host keeps the role across a refresh ─────────────────────────────
-const hostSock = await connect();
-a.close();
+const hostAgain = await connect();
+host.close();
 await wait(500);
-assert(room.hostId === created.playerId, `host role kept while host is offline (host=${room.players.find((p) => p.isHost)?.name})`);
+assert(room.hostId === created.playerId, 'host role kept while host is offline');
 
-hostSock.on('room_update', (r) => (room = r));
+hostAgain.on('room_update', (r) => (room = r));
 let hostBoard = null;
-hostSock.on('private_update', (p) => (hostBoard = p));
-const hostBack = await call(hostSock, 'join_room', { code, name: 'Alice', token: created.token });
+hostAgain.on('private_update', (p) => (hostBoard = p));
+const hostBack = await call(hostAgain, 'join_room', { code, name: 'Alice', token: created.token });
 assert(hostBack.ok && hostBack.playerId === created.playerId, 'host reconnected as the same player');
 await wait(200);
 assert(room.hostId === created.playerId, 'host role still belongs to Alice after reconnect');
 
 // ── restart ──────────────────────────────────────────────────────────
-assert((await call(hostSock, 'play_again')).ok, 'host restarted the room');
+assert((await call(hostAgain, 'play_again')).ok, 'host restarted the room');
 await wait(200);
-assert(hostBoard?.board.length === 0, 'boards cleared on restart');
+assert(hostBoard?.board.length === 0, 'host still has no card after restart');
 assert(room.status === 'lobby', `back in lobby (${room.status})`);
 
-[b, c, d, e, hostSock].forEach((s) => s.close());
+[b, c, d, spare, hostAgain].forEach((s) => s.close());
 console.log(process.exitCode ? '\nSome checks FAILED.' : '\nAll checks passed.');
 setTimeout(() => process.exit(process.exitCode || 0), 200);

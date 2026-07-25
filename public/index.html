@@ -118,6 +118,12 @@
     </div>
     <p class="hint" id="invite-hint" hidden></p>
 
+    <div class="qr" id="qr-box">
+      <img class="qr-img" id="qr-img" alt="QR code to join this room" width="180" height="180" />
+      <p class="hint">Scan to join</p>
+    </div>
+    <p class="role-note" id="role-note" hidden></p>
+
     <div class="card">
       <div class="card-head">
         <h3>Players <span class="count" id="lobby-count">0</span></h3>
@@ -153,8 +159,19 @@
 
   <p class="banner" id="game-banner" hidden></p>
 
-  <div class="board-wrap">
+  <div class="board-wrap" id="board-wrap">
     <div class="board" id="board"></div>
+  </div>
+
+  <div class="card host-panel" id="host-panel" hidden>
+    <div>
+      <h3>You're running this game</h3>
+      <p class="hint">
+        You don't get a card, and players can't put your name on their squares.
+        Here's how everyone is doing.
+      </p>
+    </div>
+    <ul class="players" id="host-players"></ul>
   </div>
 
   <aside class="scores" id="scores" hidden>

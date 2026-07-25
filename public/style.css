@@ -282,6 +282,22 @@ input[type="text"]:focus-visible {
   padding: 0.6rem 0.7rem;
 }
 .invite .btn { flex: none; }
+/* ── QR code ───────────────────────────────────────────────── */
+.qr { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; }
+.qr .hint { margin: 0; }
+.qr-img {
+  display: block;
+  width: 180px;
+  height: 180px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.host-panel { gap: 1rem; }
+.host-panel h3 { margin-bottom: 0.3rem; }
+.role-note,
 .invite-note {
   margin: 0;
   padding: 0.7rem 0.9rem;
