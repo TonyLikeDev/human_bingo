@@ -1,0 +1,15 @@
+# Deploy Human Bingo as a single always-on Node process - no database required.
+# One persistent process shares one memory for every request, so the in-memory room
+# store just works (unlike Vercel's many stateless instances).
+#
+# Render → New → Blueprint → pick this repo. Then set GROQ_API_KEY when prompted.
+services:
+  - type: web
+    name: human-bingo
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false # you paste this in the Render dashboard; it is not committed

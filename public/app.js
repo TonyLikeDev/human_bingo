@@ -367,7 +367,7 @@ function renderGameChrome() {
 
   const actions = $('game-actions');
   actions.innerHTML = '';
-  if (room.status === 'finished' && room.hostId === state.me.id) {
+  if (room.status === 'finished' && iAmHost) {
     const again = document.createElement('button');
     again.className = 'btn btn-primary';
     again.textContent = 'Play again';
@@ -376,6 +376,31 @@ function renderGameChrome() {
       if (!res.ok) toast(res.error, true);
     };
     actions.append(again);
+  }
+  if (room.status === 'playing' && iAmHost) {
+    // Stopping wipes everyone's marked squares, so require a confirming second tap.
+    const stop = document.createElement('button');
+    stop.className = 'btn';
+    stop.textContent = 'Stop game';
+    let armed = false;
+    let armTimer;
+    stop.onclick = async () => {
+      if (!armed) {
+        armed = true;
+        stop.textContent = 'Tap again to end the round';
+        stop.classList.add('btn-danger');
+        armTimer = setTimeout(() => {
+          armed = false;
+          stop.textContent = 'Stop game';
+          stop.classList.remove('btn-danger');
+        }, 3000);
+        return;
+      }
+      clearTimeout(armTimer);
+      const res = await emit('stop_game');
+      if (!res.ok) toast(res.error, true);
+    };
+    actions.append(stop);
   }
   const leave = document.createElement('button');
   leave.className = 'btn btn-danger';

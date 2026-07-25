@@ -208,5 +208,19 @@ assert(again.room.status === 'lobby', `back in lobby (${again.room.status})`);
 const hostAfter = await stateOf(hostS);
 assert(hostAfter.private === null, 'host still has no card after restart');
 
+// ── host can stop a game early ────────────────────────────────────────
+await Promise.all([stateOf(bS), stateOf(cS), stateOf(dS)]); // refresh presence before restart
+const restart = await call(hostS, 'start_game');
+assert(restart.ok, 'game started again for the stop-game check');
+
+const notHostStop = await call(bS, 'stop_game');
+assert(!notHostStop.ok && /host/i.test(notHostStop.error), `non-host cannot stop -> "${notHostStop.error}"`);
+
+const stopped = await call(hostS, 'stop_game');
+assert(stopped.ok && stopped.room.status === 'lobby', `host stopped the game -> lobby (${stopped.room?.status})`);
+
+const stopAgain = await call(hostS, 'stop_game');
+assert(!stopAgain.ok && /not running/i.test(stopAgain.error), `stopping in the lobby is rejected -> "${stopAgain.error}"`);
+
 console.log(process.exitCode ? '\nSome checks FAILED.' : '\nAll checks passed.');
 process.exit(process.exitCode || 0);
