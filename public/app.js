@@ -33,8 +33,12 @@ function loadSession() {
 
 /* ── ui helpers ─────────────────────────────────────────────── */
 function show(screen) {
+  const target = $(`screen-${screen}`);
+  // applyRoom re-runs on every poll, so bail if we're already on this screen -
+  // otherwise the scroll-to-top below would yank you back up every couple of seconds.
+  if (target.classList.contains('is-active')) return;
   document.querySelectorAll('.screen').forEach((el) => el.classList.remove('is-active'));
-  $(`screen-${screen}`).classList.add('is-active');
+  target.classList.add('is-active');
   window.scrollTo({ top: 0 });
 }
 
